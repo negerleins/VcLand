@@ -108,7 +108,7 @@ function leaderService:sessionCheck(): boolean
 end;
 
 --/ Create a player's leaderService object
-function leaderService:createCache(): { [any]: any }
+function leaderService:createCache(): template
     assert(self.player and self.player:IsA("Player"), "Player must be a player object or exist.");
 
     local playerCache = table.clone(self.Template);
