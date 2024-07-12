@@ -1,3 +1,40 @@
+--/ Types: ServerScript
+type template = {
+    Data: {
+        Coins: number;
+    };
+    SessionId: boolean;
+};
+
+type leaderService = {
+    FailSave: {
+        Retry: number;
+        Delay: number;
+    };
+
+    Template: template;
+};
+
+type leaderServiceMeta<T> = {
+    getCache: (self: leaderServiceMeta<T...>) -> { [any]: any };
+    sessionCheck: (self: leaderServiceMeta<T...>) -> boolean;
+    createCache: (self: leaderServiceMeta<T...>) -> { [any]: any };
+    saveCache: (self: leaderServiceMeta<T...>) -> boolean;
+    updateStats: (self: leaderServiceMeta<T...>) -> boolean;
+} & template & typeof(setmetatable)
+
+type shared = {
+    Cache: { [number]: leaderService };
+    Leaderboard: Folder;
+};
+
+type serverService = {
+    Sessions: { [number]: serverService };
+    Shared: shared,
+
+    New: (self: serverService, player: Player) -> leaderServiceMeta<shared>;
+    Get: (self: serverService, player: Player) -> leaderServiceMeta<shared>;
+};
 
 --/ Services
 local ReplicatedStorage = game:GetService("ReplicatedStorage");
@@ -13,7 +50,7 @@ local ShopEvent: RemoteEvent = Remotes:FindFirstChild "ShopEvent";
 local ShopList = require(game.ReplicatedStorage.ShopList);
 
 --/ Variables
-local leaderService = {
+local leaderService: leaderService = {
     FailSave = {
         Retry = 5,
         Delay = 1;
@@ -104,7 +141,7 @@ function leaderService:saveCache(): boolean
 end;
 
 --/ Update a player's leaderService object
-function leaderService:updateStats()
+function leaderService:updateStats(): boolean
     local Leaderboard: Folder = self.Leaderboard;
     local playerCache = self:getCache();
     
@@ -114,6 +151,7 @@ function leaderService:updateStats()
 
             if data then
                 object.Value = data;
+                return true;
             else
                 warn("Failed to update stat:", object.Name, "Data does not exist.");
             end;
@@ -121,10 +159,12 @@ function leaderService:updateStats()
     else
         warn("Failed to update stats: Cache does not exist.");
     end;
+
+    return false;
 end
 
 --/ serverService object
-local serverService = {
+local serverService: serverService = {
     Sessions = {},
     Shared = {
         Cache = {},
@@ -132,13 +172,15 @@ local serverService = {
     };
 };
 
-function serverService:New(player: Player): { [any]: any }
+--/ New serverService object
+function serverService:New(player: Player): leaderServiceMeta<shared>
     local newSession = setmetatable(self.Shared, leaderService)
 
     return rawset(self.Sessions, player.UserId, newSession);
 end
 
-function serverService:Get(player: Player): { [any]: any }
+--/ Get a player's serverService object
+function serverService:Get(player: Player): leaderServiceMeta<shared>
     return rawget(self.Sessions, player.UserId);
 end
 
@@ -150,11 +192,11 @@ local Events = {
         local validSession = playerSession and playerSession:sessionCheck();
 
         if playerCache and validSession then
-            local item = rawget(ShopList.Tools, item);
+            local itemObject= rawget(ShopList.Tools, item);
 
-            if item then
-                if playerCache.Data.Coins >= item.Price then
-                    playerCache.Data.Coins = playerCache.Data.Coins - item.Price;
+            if itemObject then
+                if playerCache.Data.Coins >= itemObject.Price then
+                    playerCache.Data.Coins = playerCache.Data.Coins - itemObject.Price;
                     playerSession:saveCache();
 
                     warn("Purchased item:", item, player.UserId);
@@ -174,6 +216,7 @@ local Events = {
     end;
 };
 
+--/ ShopEvent OnServerEvent
 ShopEvent.OnServerEvent:Connect(function(invoker: Player, event: string, item: string)
     local event = rawget(Events, event); --/ Gets the event from the Events table
 
@@ -205,11 +248,15 @@ Players.PlayerAdded:Connect(function(player: Player)
         --/ Creates the player's cache
         local playerCache = newSession:getCache();
 
-        if playerCache then
-            playerCache.SessionId = game.JobId;
-        else
-            newSession:createCache();
+        if not playerCache then
+            newSession:createCache(); --/ Creates the player's cache
         end;
+        
+        --/ Session ID
+        newSession.SessionId = game.JobId;
+
+        --/ Saves the player's cache
+        newSession:saveCache();
     else
         player:Kick("Failed to create session.");
     end;
@@ -221,9 +268,10 @@ Players.PlayerRemoving:Connect(function(player: Player)
     if getSession then
         local getCache = getSession:getCache();
 
+        --/ Checks if the session ID matches the game's JobId
         if getCache.sessionId == game.JobId then
             getSession.sessionId = false;
-            getSession:saveCache();
+            getSession:saveCache(); --/ Saves the player's cache
         else
             warn("Session ID does not match:", player.UserId);
         end;
