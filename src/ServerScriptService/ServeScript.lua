@@ -43,11 +43,17 @@ local DataStore = DataStoreService:GetDataStore("PlayeData");
 local Players = game.Players;
 
 --/ Remotes
-local Remotes: Folder = ReplicatedStorage.Remotes;
-local ShopEvent: RemoteEvent = Remotes:FindFirstChild "ShopEvent";
+local Shared: Folder = ReplicatedStorage:FindFirstChild "Shared";
+local ShopEvent: RemoteEvent = Shared:FindFirstChild("ShopEvent", true) or Instance.new('RemoteEvent', Shared);
+if ShopEvent.Name == 'RemoteEvent' then
+    ShopEvent.Name = 'RemoteEvent';
+end
+
+--/ Get Modules
+local moduleShopList = Shared:FindFirstChild "ShopList";
 
 --/ Requires
-local ShopList = require(game.ReplicatedStorage.ShopList);
+local ShopList = require(moduleShopList);
 
 --/ Variables
 local leaderService: leaderService = {
@@ -68,43 +74,46 @@ local leaderService: leaderService = {
 leaderService.__index = leaderService;
 
 --/ Get a player's leaderService object
-function leaderService:getCache(): { [any]: any }
+function leaderService:getCache(): { [any]: any } | boolean
     local exists = rawget(self.Cache, self.userId);
 
     if not exists then
-        local success, data = pcall(DataStore.GetAsync, DataStore, self.userId);
+        local success, response = pcall(DataStore.GetAsync, DataStore, self.userId);
 
-        if success and data then
-            return rawset(self.Cache, self.userId, data);
+        if success and response then
+            return rawset(self.Cache, self.userId, response);
         else
-            warn("Failed to get data:", data);
+            print("Failed to get data:", response);
         end;
     else
         return rawget(self.Cache, self.userId);
     end;
+    
+    return false;
 end;
 
 --/ Check if a player's session is valid
 function leaderService:sessionCheck(): boolean
-    local success, data = pcall(DataStore.GetAsync, DataStore, self.userId);
+    local success, response = pcall(DataStore.GetAsync, DataStore, self.userId);
 
     if success then
-        if data then
-            if data.SessionId == game.JobId or not data.SessionId then
+        if response then
+            if response.SessionId == game.JobId or not response.SessionId then
                 return true;
             else
-                warn("Session ID does not match:", self.userId);
+                print("Session ID does not match:", self.userId);
+                return false;
             end;
         else
-            warn("Data does not exist:", self.userId);
+            print("Data does not exist:", self.userId);
 
             return true;
         end;
     else
-        warn("Failed to get data:", data);
+        print("Failed to get data:", response);
     end;
 
-    return false;
+    return true;
 end;
 
 --/ Create a player's leaderService object
@@ -129,12 +138,12 @@ function leaderService:saveCache(): boolean
         local success, response = pcall(DataStore.SetAsync, DataStore, self.userId, playerCache);
 
         if not success then
-            warn("Failed to save data:", response); -- Logs if the data failed to save
+            print("Failed to save data:", response); -- Logs if the data failed to save
         else
             return success;
         end;
     else
-        warn("Failed to save data: Cache does not exist:", userName); -- Logs if the cache does not exist
+        print("Failed to save data: Cache does not exist:", userName); -- Logs if the cache does not exist
     end;
 
     return false;
@@ -153,11 +162,29 @@ function leaderService:updateStats(): boolean
                 object.Value = data;
                 return true;
             else
-                warn("Failed to update stat:", object.Name, "Data does not exist.");
+                print("Failed to update stat:", object.Name, "Data does not exist.");
             end;
         end
     else
-        warn("Failed to update stats: Cache does not exist.");
+        print("Failed to update stats: Cache does not exist.");
+    end;
+
+    return false;
+end;
+
+--/ Create's the player's leaderStat value oobject(s)
+function leaderService:createStats(): boolean
+    local Leaderboard: Folder = self.Leaderboard;
+    local playerCache = self:getCache();
+    
+    if playerCache then
+        for name, value in playerCache.Data do
+            local newValue = Instance.new("StringValue", Leaderboard);
+            newValue.Name = name;
+            newValue.Value = value;
+        end
+    else
+        print("Failed to update stats: Cache does not exist.");
     end;
 
     return false;
@@ -168,21 +195,26 @@ local serverService: serverService = {
     Sessions = {},
     Shared = {
         Cache = {},
-        Leaderboard = nil
+        Leaderboard = nil,
+        userId = 0
     };
 };
 
 --/ New serverService object
 function serverService:New(player: Player): leaderServiceMeta<shared>
-    local newSession = setmetatable(self.Shared, leaderService)
+    local newSession = setmetatable(self.Shared, leaderService);
+    newSession.player = player;
+    newSession.userId = player.UserId;
 
-    return rawset(self.Sessions, player.UserId, newSession);
-end
+    self.Sessions[player.UserId] = newSession
+
+    return newSession
+end;
 
 --/ Get a player's serverService object
 function serverService:Get(player: Player): leaderServiceMeta<shared>
     return rawget(self.Sessions, player.UserId);
-end
+end;
 
 --/ RemoteEvent OnServerEvent
 local Events = {
@@ -192,24 +224,24 @@ local Events = {
         local validSession = playerSession and playerSession:sessionCheck();
 
         if playerCache and validSession then
-            local itemObject= rawget(ShopList.Tools, item);
+            local itemObject= rawget(ShopList, item);
 
             if itemObject then
                 if playerCache.Data.Coins >= itemObject.Price then
                     playerCache.Data.Coins = playerCache.Data.Coins - itemObject.Price;
                     playerSession:saveCache();
 
-                    warn("Purchased item:", item, player.UserId);
+                    print("Purchased item:", item, player.UserId);
 
                     return true;
                 else
-                    warn("Failed to purchase item: Not enough coins.", player.UserId);
+                    print("Failed to purchase item: Not enough coins.", player.UserId);
                 end;
             else
-                warn("Failed to purchase item: Item does not exist.", player.UserId);
+                print("Failed to purchase item: Item does not exist.", player.UserId);
             end;
         else
-            warn("Failed to get player cache:", player.UserId, 'evemt:', event);
+            print("Failed to get player cache:", player.UserId, 'evemt:', event);
         end;
 
         return false;
@@ -221,7 +253,7 @@ ShopEvent.OnServerEvent:Connect(function(invoker: Player, event: string, item: s
     local event = rawget(Events, event); --/ Gets the event from the Events table
 
     if not event then
-        warn("Event does not exist:", event, "Invoker:", invoker.UserId);
+        print("Event does not exist:", event, "Invoker:", invoker.UserId);
         return;
     end;
 
@@ -229,14 +261,29 @@ ShopEvent.OnServerEvent:Connect(function(invoker: Player, event: string, item: s
     local success, response = pcall(event, invoker, event, item);
 
     if not success then
-        warn("Failed to invoke event:", response, invoker.UserId);
+        print("Failed to invoke event:", response, invoker.UserId);
     end;
 end);
 
 --/ PlayerAdded and PlayerRemoving
 Players.PlayerAdded:Connect(function(player: Player)
+    print("Creating session for player:", player.Name)
+
     local newSession = serverService:New(player);
     local validSession = newSession:sessionCheck();
+
+    player.CharacterAdded:Connect(function()
+        print('CharacterAdded');
+        local gui = player.PlayerGui:FindFirstChild('Coins')
+
+        gui.TextButton.MouseButton1Click:Connect(function()
+            local getCache = newSession:getCache();
+            print(getCache);
+
+            getCache.Data.Coins += 1
+            gui.TextButton.Text = getCache.Data.Coins
+        end);
+    end);
 
     if validSession then
         local leaderstats = Instance.new("Folder");
@@ -257,23 +304,41 @@ Players.PlayerAdded:Connect(function(player: Player)
 
         --/ Saves the player's cache
         newSession:saveCache();
+        newSession:createStats();
+
+        print('Succesfully created session for player:', player.Name);
     else
         player:Kick("Failed to create session.");
     end;
 end)
 
-Players.PlayerRemoving:Connect(function(player: Player)
+local function saveData(player)
+    print("Ending session for player:", player.Name)
+
     local getSession = serverService:Get(player);
 
     if getSession then
         local getCache = getSession:getCache();
 
-        --/ Checks if the session ID matches the game's JobId
-        if getCache.sessionId == game.JobId then
-            getSession.sessionId = false;
-            getSession:saveCache(); --/ Saves the player's cache
-        else
-            warn("Session ID does not match:", player.UserId);
+        if getCache then
+            --/ Checks if the session ID matches the game's JobId
+            if getCache.SessionId == game.JobId then
+                getSession.SessionId = false;
+                getSession:saveCache(); --/ Saves the player's cache
+
+                print('Saved session data for:' , player.Name)
+            else
+                print("Session ID does not match:", player.UserId);
+            end;
         end;
     end;
+end;
+
+game:BindToClose(function()
+    for _, player in Players:GetPlayers() do
+        coroutine.wrap(saveData)(player);
+        task.wait(1.5);
+    end;
 end);
+
+Players.PlayerRemoving:Connect(saveData);
