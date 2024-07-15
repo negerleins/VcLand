@@ -37,6 +37,8 @@ type serverService = {
 };
 
 --/ Services
+local HttpService = game:GetService('HttpService');
+local RunService = game:GetService('RunService');
 local ReplicatedStorage = game:GetService("ReplicatedStorage");
 local DataStoreService = game:GetService("DataStoreService");
 local DataStore = DataStoreService:GetDataStore("PlayeData");
@@ -66,7 +68,7 @@ local leaderService: leaderService = {
         Data = {
             Coins = 0;
         }, 
-        SessionId = false
+        SessionId = ""
     };
 };
 
@@ -81,7 +83,8 @@ function leaderService:getCache(): { [any]: any } | boolean
         local success, response = pcall(DataStore.GetAsync, DataStore, self.userId);
 
         if success and response then
-            return rawset(self.Cache, self.userId, response);
+            self.Cache[self.userId] = response;
+            return self:getCache();
         else
             print("Failed to get data:", response);
         end;
@@ -98,11 +101,15 @@ function leaderService:sessionCheck(): boolean
 
     if success then
         if response then
-            if response.SessionId == game.JobId or not response.SessionId then
+            if typeof(response.SessionId) == 'string' and #response.SessionId == 0 then
+                print("User has no active session:", self.userId, response.SessionId);
                 return true;
-            else
-                print("Session ID does not match:", self.userId);
+            elseif response.SessionId ~= game.JobId then
+                print("Session ID does not match:", self.userId, response.SessionId);
                 return false;
+            else
+                print("Data does not exist:", self.userId);
+                return true;
             end;
         else
             print("Data does not exist:", self.userId);
@@ -121,7 +128,6 @@ function leaderService:createCache(): template
     assert(self.player and self.player:IsA("Player"), "Player must be a player object or exist.");
 
     local playerCache = table.clone(self.Template);
-    playerCache.SessionId = game.JobId;
 
     self.Cache[self.userId] = playerCache;
     return rawget(self.Cache, self.userId);
@@ -135,7 +141,9 @@ function leaderService:saveCache(): boolean
     local playerCache = self:getCache();
 
     if playerCache then
-        local success, response = pcall(DataStore.SetAsync, DataStore, self.userId, playerCache);
+        local success, response = pcall(DataStore.UpdateAsync, DataStore, self.userId, function()
+            return playerCache;
+        end);
 
         if not success then
             print("Failed to save data:", response); -- Logs if the data failed to save
@@ -196,7 +204,8 @@ local serverService: serverService = {
     Shared = {
         Cache = {},
         Leaderboard = nil,
-        userId = 0
+        userId = nil,
+        player = nil
     };
 };
 
@@ -206,7 +215,7 @@ function serverService:New(player: Player): leaderServiceMeta<shared>
     newSession.player = player;
     newSession.userId = player.UserId;
 
-    self.Sessions[player.UserId] = newSession
+    self.Sessions[player.UserId] = newSession;
 
     return newSession
 end;
@@ -272,19 +281,6 @@ Players.PlayerAdded:Connect(function(player: Player)
     local newSession = serverService:New(player);
     local validSession = newSession:sessionCheck();
 
-    player.CharacterAdded:Connect(function()
-        print('CharacterAdded');
-        local gui = player.PlayerGui:FindFirstChild('Coins')
-
-        gui.TextButton.MouseButton1Click:Connect(function()
-            local getCache = newSession:getCache();
-            print(getCache);
-
-            getCache.Data.Coins += 1
-            gui.TextButton.Text = getCache.Data.Coins
-        end);
-    end);
-
     if validSession then
         local leaderstats = Instance.new("Folder");
         leaderstats.Name = "leaderstats";
@@ -300,13 +296,17 @@ Players.PlayerAdded:Connect(function(player: Player)
         end;
         
         --/ Session ID
-        newSession.SessionId = game.JobId;
+        if RunService:IsStudio() then
+            playerCache.SessionId = HttpService:GenerateGUID(false);
+        else
+            playerCache.SessionId = game.JobId;
+        end;
 
         --/ Saves the player's cache
         newSession:saveCache();
         newSession:createStats();
 
-        print('Succesfully created session for player:', player.Name);
+        print('Succesfully created session for player:', player.Name)
     else
         player:Kick("Failed to create session.");
     end;
@@ -323,7 +323,7 @@ local function saveData(player)
         if getCache then
             --/ Checks if the session ID matches the game's JobId
             if getCache.SessionId == game.JobId then
-                getSession.SessionId = false;
+                getSession.SessionId = "";
                 getSession:saveCache(); --/ Saves the player's cache
 
                 print('Saved session data for:' , player.Name)
@@ -332,12 +332,14 @@ local function saveData(player)
             end;
         end;
     end;
+
+    task.wait(1);
 end;
 
 game:BindToClose(function()
     for _, player in Players:GetPlayers() do
         coroutine.wrap(saveData)(player);
-        task.wait(1.5);
+        task.wait(2);
     end;
 end);
 
